@@ -92,10 +92,8 @@ int main(int argc, char* argv[]) {
     std::cout << "--Just Starting" << std::endl;
     std::cout << "----------------------------------------" << std::endl;
 
-    // // [messagesRecieved]: Track # of messages received from OSS
+    // [messagesRecieved]: Track # of messages received from OSS
     int messagesReceived = 0;
-    // [myResources]: Track instances of each resource class currently held by worker process, initialized to 0
-    int myResources[RESOURCE_CLASSES] = {0};
 
     // MAIN LOOP
     while (!done) {
@@ -113,11 +111,20 @@ int main(int argc, char* argv[]) {
             done = 1;
         }
 
-        // MAKE MEMORY REQUEST
+    // MAKE MEMORY REQUEST
+        // pick a random page number 
+            // [rand()]: generate psuedo-random int
+            // [%]: modulus to limit range within valid page numbers (0 to PROCESS_PAGES-1)
         int page = rand() % PROCESS_PAGES;
+        // pick a random offset within the selected page
+            // [% PAGE_SIZE]: limit offset to within page size (0 to PAGE_SIZE-1)
         int offset = rand() % PAGE_SIZE;
+        // calculate actual memory address being accessed
+            // [address] = (page number * PAGE_SIZE) + offset
         int address = page * PAGE_SIZE + offset;
-        int rw = (rand() % 100 < 70) ? 0 : 1;       // 70% read, 30% write
+        // randomly decide read or write
+            // 70% read (0), 30% write (1)
+        int rw = (rand() % 100 < 70) ? 0 : 1;
 
         // Send memory request to OSS
         MsgBuf request;
@@ -136,7 +143,7 @@ int main(int argc, char* argv[]) {
             done = 1;
         } else if (msg.result == 2) {
             std::cout << "WORKER: Page fault, waiting for resource." << std::endl;
-            // Handle page fault (wait for resource to be available)
+            // Wait for OSS to notify when page available
             msgrcv(msq_id, &msg, sizeof(MsgBuf) - sizeof(long), pid + 1000, 0);
         }
 

@@ -286,6 +286,11 @@ int main(int argc, char* argv[]) {
     unsigned int totalBlockedEvents = 0;                        // count of times a process was blocked
     Frame frameTable[SYSTEM_FRAMES] = {};                       // [frameTable]: array to hold SYSTEM_FRAMES instances of Frame struct
     std::vector<int> fifoQueue;                                 // FIFO queue to track frame loading order for page replacement
+    unsigned int lastMemoryPrintSec = 0;
+    unsigned int lastMemoryPrintNano = 0;
+    int totalPageFaults = 0;
+    int totalReads = 0;
+    int totalWrites = 0;
 
     srand(time(NULL));
     // int nextChild = 0;                                       // [nextChild]: index of next child process to launch in process table
@@ -461,7 +466,35 @@ int main(int argc, char* argv[]) {
             // Update last print time to current clock time
             lastTablePrintSec = clock->seconds;
             lastTablePrintNano = clock->nanoseconds;
+
+            // PRINT FRAME TABLE
+            unsigned int elapsedMemNano = (clock->seconds - lastMemoryPrintSec) * 1000000000 + (clock->nanoseconds - lastMemoryPrintNano);
+            if (elapsedMemNano >= 1000000000) {
+            std::cout << "Current memory layout at time " << clock->seconds << ":" << clock->nanoseconds << std::endl;
+            lfprintf(logf, "Current memory layout at time %u:%u\n", clock->seconds, clock->nanoseconds);
+            std::cout << "Occupied DirtyBit Process Page" << std::endl;
+            lfprintf(logf, "Occupied DirtyBit Process Page\n");
+            for (int i = 0; i < SYSTEM_FRAMES; ++i) {
+                std::cout << "Frame " << i << ": " << (frameTable[i].occupied ? "Yes" : "No") << " "
+                << frameTable[i].dirty << " " << frameTable[i].process << " " << frameTable[i].page << std::endl;
+                lfprintf(logf, "Frame %d: %s %d %d %d\n", i, frameTable[i].occupied ? "Yes" : "No", frameTable[i].dirty, frameTable[i].process, frameTable[i].page);
+            }
+            for (int p = 0; p < MAX_PROCS; ++p) {
+                if (processTable[p].occupied) {
+                    std::cout << "P" << p << " page table: [ ";
+                    lfprintf(logf, "P%d page table: [ ", p);
+                    for (int pg = 0; pg < PROCESS_PAGES; ++pg) {
+                        std::cout << processTable[p].pageTable[pg].frame << " ";
+                        lfprintf(logf, "%d ", processTable[p].pageTable[pg].frame);
+                    }
+                    std::cout << "]" << std::endl;
+                    lfprintf(logf, "]\n");
+                }
+            }
+        lastMemoryPrintSec = clock->seconds;
+        lastMemoryPrintNano = clock->nanoseconds;
         }
+    }
 
         // LAUNCH NEW CHILD WORKER PROCESSES
 
@@ -701,84 +734,127 @@ int main(int argc, char* argv[]) {
         */
         MsgBuf msg;
         ssize_t rcv = msgrcv(msqid, &msg, sizeof(MsgBuf) - sizeof(long), 0, IPC_NOWAIT);
-if (rcv != -1) {
-    // Find process index
-    int procIndex = -1;
-    for (int i = 0; i < MAX_PROCS; ++i) {
-        if (processTable[i].occupied && processTable[i].pid == msg.mtype) {
-            procIndex = i;
-            break;
-        }
-    }
-    if (procIndex != -1) {
-        int address = msg.address;
-        int rw = msg.rw;
-        int page = address / PAGE_SIZE;
-        int offset = address % PAGE_SIZE;
-
-        // Check if page is loaded
-        if (processTable[procIndex].pageTable[page].valid) {
-            int frameIdx = processTable[procIndex].pageTable[page].frame;
-            // Set dirty bit if write
-            if (rw == 1) frameTable[frameIdx].dirty = true;
-            // Log access
-            std::cout << "OSS: P" << procIndex << " " << (rw ? "write" : "read") << " of address " << address << " at time " << clock->seconds << ":" << clock->nanoseconds << std::endl;
-            // Increment clock by 100ns
-            clock->nanoseconds += 100;
-            if (clock->nanoseconds >= 1000000000) { clock->seconds++; clock->nanoseconds -= 1000000000; }
-            // Reply: granted
-            MsgBuf reply;
-            reply.mtype = processTable[procIndex].pid + 1000;
-            reply.result = 1;
-            msgsnd(msqid, &reply, sizeof(MsgBuf) - sizeof(long), 0);
-        } else {
-            // Page fault: need to load page
-            std::cout << "OSS: P" << procIndex << " page fault for address " << address << " (page " << page << ")" << std::endl;
-            // Find free frame or FIFO victim
-            int frameIdx = -1;
-            for (int i = 0; i < SYSTEM_FRAMES; ++i) {
-                if (!frameTable[i].occupied) { frameIdx = i; break; }
+        
+        if (rcv != -1) {
+        // Find which process sent request by matching PID
+        int procIndex = -1;
+        for (int i = 0; i < MAX_PROCS; ++i) {
+            if (processTable[i].occupied && processTable[i].pid == msg.mtype) {
+                procIndex = i;
+                break;
             }
-            if (frameIdx == -1) {
-                // FIFO: evict oldest
-                frameIdx = fifoQueue.front();
-                fifoQueue.erase(fifoQueue.begin());
-                // If dirty, add extra time
-                if (frameTable[frameIdx].dirty) {
-                    std::cout << "OSS: Dirty bit set, adding extra time for swap out" << std::endl;
-                    clock->nanoseconds += 1000000; // 1ms extra
-                    if (clock->nanoseconds >= 1000000000) { clock->seconds++; clock->nanoseconds -= 1000000000; }
+        }
+        if (procIndex != -1) {
+            // Extract requested address and read/write flag from message
+            int address = msg.address;
+            int rw = msg.rw;
+            // Which page is being accessed
+            int page = address / PAGE_SIZE;
+            // COffset within page
+            int offset = address % PAGE_SIZE;
+
+            // Update read/write counters
+            if (rw == 0) totalReads++;
+            else totalWrites++;
+
+            // Check if the requested page is already loaded in memory (valid bit)
+            if (processTable[procIndex].pageTable[page].valid) {
+                // Page is in memory: get frame index
+                int frameIdx = processTable[procIndex].pageTable[page].frame;
+
+                // If write, set dirty bit for the frame
+                if (rw == 1) frameTable[frameIdx].dirty = true;
+
+                // Log memory access
+                std::cout   << "OSS: P" << procIndex << " " << (rw ? "write" : "read")
+                            << " of address " << address << " at time "
+                            << clock->seconds << ":" << clock->nanoseconds << std::endl;
+                lfprintf(logf, "OSS: P%d %s of address %d at time %u:%u\n",
+                        procIndex, rw ? "write" : "read", address, clock->seconds, clock->nanoseconds);
+                
+                // Increment clock by 100ns for memory access
+                clock->nanoseconds += 100;
+                if (clock->nanoseconds >= 1000000000) {
+                    clock->seconds++;
+                    clock->nanoseconds -= 1000000000;
                 }
-                // Clear victim frame
-                int oldProc = frameTable[frameIdx].process;
-                int oldPage = frameTable[frameIdx].page;
-                if (oldProc >= 0 && oldPage >= 0)
-                    processTable[oldProc].pageTable[oldPage].valid = false;
+
+                // Send reply to worker: request granted (result = 1)
+                MsgBuf reply;
+                reply.mtype = processTable[procIndex].pid + 1000;
+                reply.result = 1;
+                msgsnd(msqid, &reply, sizeof(MsgBuf) - sizeof(long), 0);
+            } else {
+                // Page fault: requested page NOT in memory
+                totalPageFaults++;
+                std::cout   << "OSS: P" << procIndex << " page fault for address "
+                            << address << " (page " << page << ")" << std::endl;
+                lfprintf(logf, "OSS: P%d page fault for address %d (page %d)\n",
+                        procIndex, address, page);
+
+                // Find free frame or FIFO victim
+                int frameIdx = -1;
+                for (int i = 0; i < SYSTEM_FRAMES; ++i) {
+                    if (!frameTable[i].occupied) {
+                        frameIdx = i; break;
+                    }
+                }
+
+                // If no free frame, use FIFO page replacement to evict oldest frame
+                if (frameIdx == -1) {
+                    // FIFO: remove the frame that was loaded first (front of fifoQueue)
+                    frameIdx = fifoQueue.front();
+                    fifoQueue.erase(fifoQueue.begin());
+                    std::cout   << "OSS: Clearing frame " << frameIdx
+                                << " and swapping in p" << procIndex << " page " << page << std::endl;
+                    lfprintf(logf, "OSS: Clearing frame %d and swapping in p%d page %d\n",
+                            frameIdx, procIndex, page);
+
+                    // If the frame being evicted is dirty, add extra time to simulate writing back to disk
+                    if (frameTable[frameIdx].dirty) {
+                        std::cout   << "OSS: Dirty bit of frame " << frameIdx
+                                    << " set, adding additional time to the clock" << std::endl;
+                        lfprintf(logf, "OSS: Dirty bit of frame %d set, adding additional time to the clock\n", frameIdx);
+                        clock->nanoseconds += 1000000; // 1ms extra
+                        if (clock->nanoseconds >= 1000000000) {
+                            clock->seconds++;
+                            clock->nanoseconds -= 1000000000;
+                        }
+                    }
+                    // Mark the evicted page as invalid in its process's page table
+                    int oldProc = frameTable[frameIdx].process;
+                    int oldPage = frameTable[frameIdx].page;
+                    if (oldProc >= 0 && oldPage >= 0)
+                        processTable[oldProc].pageTable[oldPage].valid = false;
+                }
+
+                // Load requested page into the chosen frame
+                frameTable[frameIdx].occupied = true;
+                frameTable[frameIdx].dirty = (rw == 1); // Set dirty if write
+                frameTable[frameIdx].process = procIndex;
+                frameTable[frameIdx].page = page;
+                frameTable[frameIdx].loadedTimeSec = clock->seconds;
+                frameTable[frameIdx].loadedTimeNano = clock->nanoseconds;
+                processTable[procIndex].pageTable[page].frame = frameIdx;
+                processTable[procIndex].pageTable[page].valid = true;
+                fifoQueue.push_back(frameIdx); // Add frame to FIFO queue
+
+                // Simulate disk I/O: block for 14ms
+                clock->nanoseconds += 14000000;
+                while (clock->nanoseconds >= 1000000000) {
+                    clock->seconds++;
+                    clock->nanoseconds -= 1000000000;
+                }
+
+                // Send reply to worker: page fault handled (result = 2)
+                MsgBuf reply;
+                reply.mtype = processTable[procIndex].pid + 1000;
+                reply.result = 2;
+                msgsnd(msqid, &reply, sizeof(MsgBuf) - sizeof(long), 0);
             }
-            // Load new page
-            frameTable[frameIdx].occupied = true;
-            frameTable[frameIdx].dirty = (rw == 1);
-            frameTable[frameIdx].process = procIndex;
-            frameTable[frameIdx].page = page;
-            frameTable[frameIdx].loadedTimeSec = clock->seconds;
-            frameTable[frameIdx].loadedTimeNano = clock->nanoseconds;
-            processTable[procIndex].pageTable[page].frame = frameIdx;
-            processTable[procIndex].pageTable[page].valid = true;
-            fifoQueue.push_back(frameIdx);
-
-            // Simulate disk I/O: block for 14ms
-            clock->nanoseconds += 14000000;
-            while (clock->nanoseconds >= 1000000000) { clock->seconds++; clock->nanoseconds -= 1000000000; }
-
-            // Reply: page fault handled
-            MsgBuf reply;
-            reply.mtype = processTable[procIndex].pid + 1000;
-            reply.result = 2;
-            msgsnd(msqid, &reply, sizeof(MsgBuf) - sizeof(long), 0);
         }
     }
-}
-    }
+} // END MAIN LOOP
 
     // If terminateFlag set, send SIGTERM to all active workers
     if (terminateFlag) {
@@ -817,6 +893,17 @@ if (rcv != -1) {
     lfprintf(logf, "Average blocked time per event: %.3f ms\n", avgBlockedTime);
     lfprintf(logf, "CPU Utilization: %.2f %%\n", cpuUtilization);
     lfprintf(logf, "Total CPU idle time: %.3f ms\n", avgIdleTime);
+    
+    // PRINT PAGING STATISTICS
+    std::cout << "Total page faults: " << totalPageFaults << std::endl;
+    std::cout << "Total reads: " << totalReads << std::endl;
+    std::cout << "Total writes: " << totalWrites << std::endl;
+    double pageFaultPercent = (totalReads + totalWrites > 0) ? (double)totalPageFaults / (totalReads + totalWrites) * 100.0 : 0.0;
+    std::cout << "Page fault percentage: " << pageFaultPercent << "%" << std::endl;
+    lfprintf(logf, "Total page faults: %d\n", totalPageFaults);
+    lfprintf(logf, "Total reads: %d\n", totalReads);
+    lfprintf(logf, "Total writes: %d\n", totalWrites);
+    lfprintf(logf, "Page fault percentage: %.2f%%\n", pageFaultPercent);    
     
     // CLEANUP
     shmdt(clock);
