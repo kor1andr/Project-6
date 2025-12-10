@@ -296,7 +296,6 @@ int main(int argc, char* argv[]) {
     */
 
     // MAIN LOOP
-    int totalPageFaults = 0, totalReads = 0, totalWrites = 0;
     while ((launched < numberOfUsers || running > 0) && !terminateFlag) {
         // Check for terminated child processes (NON-BLOCKING)
         int status = 0;

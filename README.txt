@@ -5,6 +5,9 @@ Version Control: GitHub
 - - - - - - - - - -
 [AI] GPT 4.1
     [Prompts]
+    - How should I structure the frame table and page table for each process in this program?
+    - How can I block a worker process until its page fault is resolved?
+    - Why am I getting the following errors/warnings when compiling?
     - 
 [Summary]
     Found to be very useful, unfortunately... I'm not a fan of the increasing over-reliance on generative AI and
