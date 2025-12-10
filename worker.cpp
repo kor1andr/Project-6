@@ -7,9 +7,6 @@
 #include <signal.h>
 #include <ctime>            // srand, rand
 
-#define RESOURCE_CLASSES 10
-#define INSTANCES_PER_RESOURCE 5
-// Paging
 #define PROCESS_PAGES 16
 #define PAGE_SIZE 1024
 

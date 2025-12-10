@@ -30,8 +30,6 @@ int lfprintf(FILE *stream,const char *format, ... ) {
 
 #define MAX_PROCS 18                // Max number of worker processes
 #define BASE_QUANTUM_NS 10000000    // Base time quantum for scheduler (10 ms in nanoseconds)
-#define RESOURCE_CLASSES 10         // Replace every occurance of RESOURCE_CLASSES with 10 (10 different classes of resources, R0-R9)
-#define INSTANCES_PER_RESOURCE 5    // Each resource class has 5 identical instances available for allocation
 // PAGING
 #define PAGE_SIZE 1024
 #define PROCESS_PAGES 16
@@ -84,7 +82,6 @@ struct MsgBuf {
     long mtype;
     int status;         // 1 = running, 0 = wants to terminate
     int quantum;        // store the time quantum assigned to a worker processes
-    int resourceRequest[RESOURCE_CLASSES];  // resourceRequest[i]: +N = request N instances of resource i; -N = release N instances of resource i; 0 = no action
     int address;        // memory address requested
     int rw;             // 0 = read, 1 = write
     int result;         // used by worker to tell OSS how much of quantum it used
@@ -137,19 +134,6 @@ int selectNextProcess(PCB processTable[], int maxProcs, unsigned int nowSec, uns
     }
     return selected;
 }
-
-// RESOURCE DESCRIPTOR
-struct ResourceDescriptor {
-    int totalInstances;
-    int availableInstances;
-    int allocated[MAX_PROCS];       // allocated[i] = # of this resource held by process i
-};
-
-// RESOURCE TABLE
-ResourceDescriptor resourceTable[RESOURCE_CLASSES];
-
-// tryGrantRequest() prototype
-int tryGrantRequest(int procIndex, int request[RESOURCE_CLASSES]);
 
 // MAIN
 int main(int argc, char* argv[]) {
@@ -303,13 +287,13 @@ int main(int argc, char* argv[]) {
         - Set totalInstances and availableInstances to INSTANCES_PER_RESOURCE (5), so every resource clas starts with all 5 instances available for allocation
         - Iterate through each possible process (0 to MAX_PROCS-1)
             - Set # of instances of the current resource class allocated to that process to 0, so no resources are allocated at start
-    */
     for (int i = 0; i < RESOURCE_CLASSES; ++i) {
         resourceTable[i].totalInstances = INSTANCES_PER_RESOURCE;
         resourceTable[i].availableInstances = INSTANCES_PER_RESOURCE;
         for (int j = 0; j < MAX_PROCS; ++j)
             resourceTable[i].allocated[j] = 0;
     }
+    */
 
     // MAIN LOOP
     int totalPageFaults = 0, totalReads = 0, totalWrites = 0;
@@ -440,28 +424,6 @@ int main(int argc, char* argv[]) {
             std::cout << "]" << std::endl;
             lfprintf(logf, "]\n");
             // End blocked process list
-
-            // PRINT RESOURCE TABLE
-            std::cout << "Resource Table:\n";
-            lfprintf(logf, "Resource Table:\n");
-            std::cout << "Res | Avail | ";
-            lfprintf(logf, "Res | Avail | ");
-            for (int i = 0; i < MAX_PROCS; ++i) {
-                std::cout << "P" << i << " ";
-                lfprintf(logf, "P%d ", i);
-            }
-            std::cout << "\n";
-            lfprintf(logf, "\n");
-            for (int i = 0; i < RESOURCE_CLASSES; ++i) {
-                std::cout << "R" << i << " | " << resourceTable[i].availableInstances << " | ";
-                lfprintf(logf, "R%d | %d | ", i, resourceTable[i].availableInstances);
-                for (int j = 0; j < MAX_PROCS; ++j) {
-                    std::cout << resourceTable[i].allocated[j] << " ";
-                    lfprintf(logf, "%d ", resourceTable[i].allocated[j]);
-                }
-                std::cout << "\n";
-                lfprintf(logf, "\n");
-            }
 
             // Update last print time to current clock time
             lastTablePrintSec = clock->seconds;
@@ -930,7 +892,7 @@ int main(int argc, char* argv[]) {
             - if request[i] > 0, allocate requested instances to process and decrease availableInstances
             - if request[i] < 0, release instances from process and increase availableInstances
     - if not enough resources, return 0 to indicate process should be blocked
-*/
+
 int tryGrantRequest(int procIndex, int request[RESOURCE_CLASSES]) {
     // Check if enough resources are available
     for (int i = 0; i < RESOURCE_CLASSES; ++i) {
@@ -952,4 +914,4 @@ int tryGrantRequest(int procIndex, int request[RESOURCE_CLASSES]) {
         }
     }
     return 1;
-}
+} */
