@@ -104,55 +104,55 @@ int main(int argc, char* argv[]) {
         int currentSec = clock->seconds;
         int currentNano = clock->nanoseconds;
         if (currentSec > termSec || (currentSec == termSec && currentNano >= termNano)) {
+            // Send termination message to OSS
+            MsgBuf termMsg;
+            termMsg.mtype = pid + 1000;   // OSS expects replies on pid+1000
+            termMsg.status = 0;           // 0 = terminating
+            termMsg.result = -1;          // negative result signals termination
+            msgsnd(msq_id, &termMsg, sizeof(MsgBuf) - sizeof(long), 0);
+
             std::cout << "--Terminating after sending message back to OSS after " << messagesReceived << " received messages." << std::endl;
-            done = 1;
-        }
-
-    // MAKE MEMORY REQUEST
-        // pick a random page number 
-            // [rand()]: generate psuedo-random int
-            // [%]: modulus to limit range within valid page numbers (0 to PROCESS_PAGES-1)
-        int page = rand() % PROCESS_PAGES;
-        // pick a random offset within the selected page
-            // [% PAGE_SIZE]: limit offset to within page size (0 to PAGE_SIZE-1)
-        int offset = rand() % PAGE_SIZE;
-        // calculate actual memory address being accessed
-            // [address] = (page number * PAGE_SIZE) + offset
-        int address = page * PAGE_SIZE + offset;
-        // randomly decide read or write
-            // 70% read (0), 30% write (1)
-        int rw = (rand() % 100 < 70) ? 0 : 1;
-
-        // Send memory request to OSS
-        MsgBuf request;
-        request.mtype = pid;
-        request.status = 1;             // 1 = memory request
-        request.address = address;
-        request.rw = rw;
-        msgsnd(msq_id, &request, sizeof(MsgBuf) - sizeof(long), 0);
-
-        // Wait for oss to reply
-        msgrcv(msq_id, &msg, sizeof(MsgBuf) - sizeof(long), pid + 1000, 0);
-
-        // If result == 0, denied (should not happen); 1 = granted; 2 = page fault (waited)
-        if (msg.result == 0) {
-            std::cerr << "WORKER: Resource denied, exiting." << std::endl;
-            done = 1;
-        } else if (msg.result == 2) {
-            std::cout << "WORKER: Page fault, waiting for resource." << std::endl;
-            // Wait for OSS to notify when page available
-            msgrcv(msq_id, &msg, sizeof(MsgBuf) - sizeof(long), pid + 1000, 0);
-        }
-
-        if (done) {
-            // DEBUG PRINT: Check worker process actually exits after sending final message
             std::cout << "WORKER PID: " << pid << " is exiting now." << std::endl;
             break;
         }
-    }
-    // NO SLEEP
 
-    // Detach from shared memory
+        // MAKE MEMORY REQUEST
+            // pick a random page number 
+                // [rand()]: generate psuedo-random int
+                // [%]: modulus to limit range within valid page numbers (0 to PROCESS_PAGES-1)
+            int page = rand() % PROCESS_PAGES;
+            // pick a random offset within the selected page
+                // [% PAGE_SIZE]: limit offset to within page size (0 to PAGE_SIZE-1)
+            int offset = rand() % PAGE_SIZE;
+            // calculate actual memory address being accessed
+                // [address] = (page number * PAGE_SIZE) + offset
+            int address = page * PAGE_SIZE + offset;
+            // randomly decide read or write
+                // 70% read (0), 30% write (1)
+            int rw = (rand() % 100 < 70) ? 0 : 1;
+
+            // Send memory request to OSS
+            MsgBuf request;
+            request.mtype = pid;
+            request.status = 1;
+            request.address = address;
+            request.rw = rw;
+            msgsnd(msq_id, &request, sizeof(MsgBuf) - sizeof(long), 0);
+
+            // Wait for oss to reply
+            msgrcv(msq_id, &msg, sizeof(MsgBuf) - sizeof(long), pid + 1000, 0);
+
+            // If result == 0, denied (should not happen); 1 = granted; 2 = page fault (waited)
+            if (msg.result == 0) {
+                std::cerr << "WORKER: Resource denied, exiting." << std::endl;
+                break;
+            } else if (msg.result == 2) {
+                std::cout << "WORKER: Page fault, waiting for resource." << std::endl;
+                // Wait for OSS to notify when page available
+                msgrcv(msq_id, &msg, sizeof(MsgBuf) - sizeof(long), pid + 1000, 0);
+            }
+    }
+
     shmdt(clock);
     return 0;
 }
